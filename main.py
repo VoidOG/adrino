@@ -1,6 +1,6 @@
 import logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 import requests
 from pymongo import MongoClient
 
@@ -19,18 +19,34 @@ LOG_GROUP_ID = -1002183841044
 LINK_SHORTENING = range(1)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # Ensure the bot only responds in direct messages (DMs)
+    if update.message.chat.type != 'private':
+        return  # Ignore messages from groups or channels
+
     user_id = update.effective_user.id
+    username = update.effective_user.username
+    first_name = update.effective_user.first_name
+    profile_url = f"https://t.me/{username}" if username else f"tg://openmessage?user_id={user_id}"
+
+    # Log user info when they start the bot
     if not users_collection.find_one({"user_id": user_id}):
         users_collection.insert_one({"user_id": user_id})
-        await context.bot.send_message(LOG_GROUP_ID, f"User started bot: {user_id}")
+        log_message = (
+            f"User started the bot:\n"
+            f"Name: {first_name}\n"
+            f"User ID: {user_id}\n"
+            f"Username: @{username}\n"
+            f"Profile URL: {profile_url}"
+        )
+        await context.bot.send_message(LOG_GROUP_ID, log_message)
 
-    image_url = "https://i.ibb.co/dWpzhvW/file-1538.jpg" 
+    image_url = "https://i.ibb.co/dWpzhvW/file-1538.jpg"
     caption_text = (
         "Welcome to the Adrino Link Creator Bot!\n\n"
         "Use /SetApi to set up your Adrino API key, and then send any link to shorten it. "
         "You can also use /track <shortened_link> to track clicks."
     )
-    
+
     keyboard = [
         [InlineKeyboardButton("Bot Updates", url="https://t.me/AlcyoneBots")],
         [InlineKeyboardButton("Support Chat", url="https://t.me/Alcyone_Support")]
@@ -38,8 +54,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await update.message.reply_photo(photo=image_url, caption=caption_text, reply_markup=reply_markup)
-    
+
 async def set_api(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # Ensure the bot only works in DM
+    if update.message.chat.type != 'private':
+        return  # Ignore messages from groups or channels
+
     user_id = update.effective_user.id
     api_key = update.message.text.split(" ", 1)[1] if len(update.message.text.split(" ", 1)) > 1 else None
 
@@ -51,6 +71,10 @@ async def set_api(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text("API key saved! Now, send a link to shorten.")
 
 async def shorten_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # Ensure the bot only works in DM
+    if update.message.chat.type != 'private':
+        return  # Ignore messages from groups or channels
+
     user_id = update.effective_user.id
     link = update.message.text
 
@@ -60,7 +84,12 @@ async def shorten_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     api_key = user_data["api_key"]
-    shortened_link = shorten_with_adrino(api_key, link)
+    alias = None
+    if len(link.split(" ", 1)) > 1:
+        alias = link.split(" ", 1)[1]  # Extract alias if available
+        link = link.split(" ", 1)[0]  # The first part is the actual URL
+
+    shortened_link = shorten_with_adrino(api_key, link, alias)
 
     if shortened_link:
         await update.message.reply_text(f"Here is your shortened link: {shortened_link}")
@@ -68,14 +97,27 @@ async def shorten_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     else:
         await update.message.reply_text("Error shortening link, please try again.")
 
-def shorten_with_adrino(api_key, link):
+def shorten_with_adrino(api_key, link, alias=None):
     url = "https://adrinolinks.com/api"
-    response = requests.post(url, json={"api_key": api_key, "link": link})
+    params = {
+        "api": api_key,
+        "url": link
+    }
+
+    if alias:
+        params["alias"] = alias
+
+    response = requests.get(url, params=params)
     if response.status_code == 200:
-        return response.json().get("shortened_link")
+        json_data = response.json()
+        return json_data.get("shortened_link")
     return None
 
 async def track(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Ensure the bot only works in DM
+    if update.message.chat.type != 'private':
+        return  # Ignore messages from groups or channels
+
     if len(context.args) < 1:
         await update.message.reply_text("Usage: /track <adrinolink>")
         return
@@ -87,6 +129,7 @@ async def track(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"{adrino_link} has been clicked {click_count} time(s).")
 
 def track_adrino_link_clicks(adrino_link, user_id):
+    # For now, returning a mock click count.
     return 1
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -102,7 +145,7 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id != OWNER_ID:
         await update.message.reply_text("You're not authorized to use this command.")
         return
-    
+
     message = update.message.text.split(" ", 1)[1] if len(update.message.text.split(" ", 1)) > 1 else None
     if not message and update.message.reply_to_message:
         message = update.message.reply_to_message.text
@@ -110,14 +153,14 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not message:
         await update.message.reply_text("Please provide a message to broadcast.")
         return
-    
+
     users = users_collection.find({})
     for user in users:
         try:
             await context.bot.send_message(user["user_id"], message)
         except Exception as e:
             logger.error(f"Failed to send message to {user['user_id']}: {e}")
-    
+
     await update.message.reply_text("Broadcast sent.")
 
 def main():
@@ -130,7 +173,7 @@ def main():
     application.add_handler(CommandHandler("track", track))
     application.add_handler(CommandHandler("stats", stats))
     application.add_handler(CommandHandler("broadcast", broadcast))
-    
+
     application.run_polling()
 
 if __name__ == "__main__":
