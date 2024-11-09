@@ -108,10 +108,20 @@ def shorten_with_adrino(api_key, link, alias=None):
         params["alias"] = alias
 
     response = requests.get(url, params=params)
-    if response.status_code == 200:
+
+    # Check if the response is empty or invalid
+    if response.status_code != 200:
+        print(f"Error: Received non-200 status code {response.status_code}")
+        return None
+
+    try:
         json_data = response.json()
-        return json_data.get("shortened_link")
-    return None
+    except requests.exceptions.JSONDecodeError:
+        print("Error: Failed to decode JSON response")
+        print(f"Response content: {response.text}")
+        return None
+
+    return json_data.get("shortened_link", None)
 
 async def track(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Ensure the bot only works in DM
